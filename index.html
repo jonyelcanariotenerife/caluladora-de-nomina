@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#020205">
+    <title>Nómina · Quantum Style</title>
+
+    <!-- Enlace al manifiesto PWA -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon.png">
+
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800;900&display=swap" rel="stylesheet" />
+
+    <style>
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background-color: #020205;
+            color: #e2e8f0;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* --- MODO CLARO (Inversión no destructiva) --- */
+        html.light-mode { filter: invert(1) hue-rotate(180deg); background-color: #f0f2f5; }
+        html.light-mode img, html.light-mode i.fa-solid { filter: invert(1) hue-rotate(180deg); }
+        html.light-mode .bg-white\/5, html.light-mode .bg-black\/30, html.light-mode .bg-black\/40 {
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+            border-color: rgba(0,0,0,0.05);
+        }
+        /* --------------------------------- */
+
+        /* Scrollbar personalizado */
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #6366f1; border-radius: 4px; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade { animation: fadeIn 0.25s ease-out forwards; }
+
+        /* Quitar flechas del input number */
+        input[type="number"]::-webkit-outer-spin-button,
+        input[type="number"]::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        input[type="number"] { -moz-appearance: textfield; }
+
+        input::placeholder { color: rgba(255, 255, 255, 0.2); }
+        html.light-mode input::placeholder { color: rgba(0, 0, 0, 0.3); }
+
+        /* Moneda rodante */
+        .coin-wrapper {
+            position: fixed; bottom: 12px; left: 0; width: 100%; height: 30px; pointer-events: none; z-index: 100;
+        }
+        .coin {
+            position: absolute; width: 28px; height: 28px;
+            background: radial-gradient(circle at 30% 30%, #ffd700, #f59e0b);
+            border-radius: 50%; display: flex; align-items: center; justify-content: center;
+            color: #92400e; font-weight: 900; border: 2px solid #fbbf24; font-size: 14px;
+            animation: roll-coin 10s linear infinite; pointer-events: auto; cursor: pointer;
+            box-shadow: 0 0 15px rgba(245, 158, 11, 0.4);
+        }
+        @keyframes roll-coin {
+            0% { left: 90%; transform: rotate(0deg) scale(1); }
+            50% { transform: rotate(360deg) scale(1.1); }
+            100% { left: 5%; transform: rotate(720deg) scale(1); }
+        }
+
+        @media print {
+            .no-print, .coin-wrapper { display: none !important; }
+            body { background: white !important; color: black !important; filter: none !important; }
+            .bg-white\/5, .bg-black\/40 { background-color: transparent !important; border: 1px solid #ccc !important; }
+            .text-white { color: black !important; }
+        }
+    </style>
+</head>
+<body class="custom-scrollbar pb-20">
+
+    <div class="max-w-3xl mx-auto p-4 sm:p-6">
+        
+        <!-- HEADER Y ACCIONES -->
+        <header class="flex justify-between items-center mb-6 no-print">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-[0_0_15px_rgba(79,70,229,0.3)]">
+                    <i class="fa-solid fa-calculator text-white text-lg"></i>
+                </div>
+                <div>
+                    <input type="text" id="title" placeholder="Título del proyecto" oninput="saveData()" class="bg-transparent border-none text-xl font-black text-white focus:outline-none focus:border-b border-indigo-500 pb-1 w-full max-w-[200px]" />
+                </div>
+            </div>
+            
+            <div class="flex gap-2">
+                <button onclick="toggleTheme()" class="w-10 h-10 rounded-xl bg-white/5 border border-white/10 text-amber-400 flex items-center justify-center hover:bg-white/10 transition-colors" title="Cambiar Tema">
+                    <i class="fa-solid fa-moon"></i>
+                </button>
+                <button onclick="document.getElementById('importFile').click()" class="w-10 h-10 rounded-xl bg-white/5 border border-white/10 text-emerald-400 flex items-center justify-center hover:bg-emerald-500/20 transition-colors" title="Importar JSON">
+                    <i class="fa-solid fa-upload"></i>
+                </button>
+                <button onclick="exportJSON()" class="w-10 h-10 rounded-xl bg-white/5 border border-white/10 text-indigo-400 flex items-center justify-center hover:bg-indigo-500/20 transition-colors" title="Exportar JSON">
+                    <i class="fa-solid fa-download"></i>
+                </button>
+                <button onclick="clearAll()" class="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center hover:bg-rose-500/30 transition-colors" title="Limpiar todo">
+                    <i class="fa-solid fa-trash"></i>
+                </button>
+                <input type="file" id="importFile" style="display:none" accept=".json" onchange="importJSON(event)">
+            </div>
+        </header>
+
+        <!-- PANEL DE INGRESOS Y RESULTADO GLOBAL -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            <div class="bg-white/5 border border-white/10 rounded-[2rem] p-6">
+                <p class="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2"><i class="fa-solid fa-money-bill-wave text-emerald-400 mr-1"></i> Ingreso Principal</p>
+                <div class="flex items-center text-3xl font-black text-emerald-400">
+                    <span>€</span>
+                    <input type="number" id="income" placeholder="0.00" inputmode="decimal" step="0.01" oninput="saveData(); calculate()" class="bg-transparent border-none focus:outline-none w-full ml-1" />
+                </div>
+            </div>
+
+            <div class="bg-indigo-600/10 border border-indigo-500/20 shadow-inner rounded-[2rem] p-6 flex flex-col justify-center relative overflow-hidden">
+                <div class="absolute -right-4 -bottom-4 opacity-10 pointer-events-none print-hidden"><i class="fa-solid fa-wallet text-6xl"></i></div>
+                <p class="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-1">Saldo Final Resultante</p>
+                <div class="text-4xl font-black" id="totalWrapper">
+                    <span class="text-xl opacity-50 mr-1">€</span><span id="total">0.00</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ESTADÍSTICAS RÁPIDAS -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8 no-print" id="statsContainer">
+            <div class="bg-black/30 border border-white/5 rounded-2xl p-4">
+                <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Total Ingresos</p>
+                <p class="text-lg font-black text-white mt-1" id="statIncome">€0.00</p>
+            </div>
+            <div class="bg-black/30 border border-white/5 rounded-2xl p-4">
+                <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Total Gastos</p>
+                <p class="text-lg font-black text-rose-400 mt-1" id="statExpenses">€0.00</p>
+            </div>
+            <div class="bg-black/30 border border-white/5 rounded-2xl p-4">
+                <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Nº Registros</p>
+                <p class="text-lg font-black text-white mt-1" id="statCount">0</p>
+            </div>
+            <div class="bg-black/30 border border-white/5 rounded-2xl p-4">
+                <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Saldo Real</p>
+                <p class="text-lg font-black mt-1" id="statBalance">€0.00</p>
+            </div>
+        </div>
+
+        <!-- GESTIÓN DE GASTOS -->
+        <div class="bg-white/5 border border-white/10 rounded-[2rem] p-6 sm:p-8">
+            <div class="flex justify-between items-center mb-6">
+                <h3 class="text-xl font-black text-white tracking-tight flex items-center gap-2">
+                    <i class="fa-solid fa-credit-card text-indigo-400"></i> Desglose de Gastos
+                </h3>
+                <div class="flex gap-2 no-print">
+                    <button class="bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-2 hover:bg-indigo-500 transition-all shadow-lg" onclick="addExpense('', '')">
+                        <i class="fa-solid fa-plus"></i> AÑADIR
+                    </button>
+                    <button class="bg-white/10 text-white px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-2 hover:bg-white/20 transition-all shadow-lg hidden sm:flex" onclick="window.print()">
+                        <i class="fa-solid fa-print"></i> PDF
+                    </button>
+                </div>
+            </div>
+
+            <!-- Contenedor Dinámico -->
+            <div id="expenses" class="space-y-3"></div>
+            
+            <button class="w-full mt-6 py-4 bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 rounded-2xl font-bold text-sm transition-all flex justify-center items-center gap-2 no-print sm:hidden" onclick="window.print()">
+                <i class="fa-solid fa-print"></i> Exportar a PDF
+            </button>
+        </div>
+
+        <!-- Moneda Flotante Original -->
+        <div class="coin-wrapper" onclick="showCredit()">
+            <div class="coin">€</div>
+        </div>
+
+    </div>
+
+    <script>
+        let saveTimeout = null;
+
+        function toggleTheme() {
+            document.documentElement.classList.toggle('light-mode');
+            localStorage.setItem('theme', document.documentElement.classList.contains('light-mode') ? 'light' : 'dark');
+            
+            const btn = document.querySelector('button[onclick="toggleTheme()"] i');
+            if(document.documentElement.classList.contains('light-mode')) {
+                btn.className = 'fa-solid fa-sun';
+            } else {
+                btn.className = 'fa-solid fa-moon';
+            }
+        }
+
+        function getExpensesData() {
+            const expenses = [];
+            document.querySelectorAll('.expense-row').forEach(row => {
+                const concept = row.querySelector('.concept');
+                const amount = row.querySelector('.amount');
+                if (concept && amount) {
+                    expenses.push({
+                        concept: concept.value || '',
+                        amount: amount.value || ''
+                    });
+                }
+            });
+            return expenses;
+        }
+
+        function saveData() {
+            clearTimeout(saveTimeout);
+            saveTimeout = setTimeout(() => {
+                try {
+                    const data = {
+                        title: document.getElementById('title').value || '',
+                        income: document.getElementById('income').value || '',
+                        expenses: getExpensesData()
+                    };
+                    localStorage.setItem('calcData', JSON.stringify(data));
+                } catch (e) {
+                    console.error('Error saving:', e);
+                }
+            }, 200);
+        }
+
+        function loadData() {
+            try {
+                const stored = localStorage.getItem('calcData');
+                if (!stored) {
+                    addExpense('', '');
+                    return;
+                }
+
+                const data = JSON.parse(stored);
+                if (!data || typeof data !== 'object') {
+                    addExpense('', '');
+                    return;
+                }
+
+                document.getElementById('title').value = data.title || '';
+                document.getElementById('income').value = data.income || '';
+
+                if (data.expenses && Array.isArray(data.expenses)) {
+                    if (data.expenses.length === 0) {
+                        addExpense('', '');
+                    } else {
+                        data.expenses.forEach(ex => {
+                            addExpense(ex.concept || '', ex.amount || '');
+                        });
+                    }
+                } else {
+                    addExpense('', '');
+                }
+            } catch (e) {
+                console.error('Error loading:', e);
+                addExpense('', '');
+            }
+        }
+
+        function addExpense(concept, amount) {
+            const container = document.getElementById('expenses');
+            const div = document.createElement('div');
+            
+            div.className = 'expense-row flex gap-3 items-center bg-black/40 border border-white/5 p-3 rounded-2xl animate-fade group transition-colors hover:bg-black/60';
+
+            div.innerHTML = `
+                <div class="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center shrink-0">
+                    <i class="fa-solid fa-tag text-slate-500 text-xs"></i>
+                </div>
+                <input type="text" class="concept flex-1 bg-transparent border-none text-sm text-white font-bold focus:outline-none placeholder-slate-600" placeholder="Concepto..." value="${escapeHtml(concept)}" inputmode="text">
+                <div class="flex items-center gap-1 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-1.5 shrink-0">
+                    <span class="text-rose-500 text-xs font-black">-</span>
+                    <input type="number" class="amount w-20 bg-transparent border-none text-right text-sm font-black text-rose-400 focus:outline-none placeholder-rose-900/50" placeholder="0.00" value="${escapeHtml(amount)}" inputmode="decimal" step="0.01">
+                </div>
+                <button class="text-slate-500 hover:text-rose-400 p-2 transition-colors rounded-lg hover:bg-rose-500/10 shrink-0 no-print" onclick="deleteExpense(this)" title="Eliminar">
+                    <i class="fa-solid fa-trash text-sm"></i>
+                </button>
+            `;
+
+            container.appendChild(div);
+
+            const conceptInput = div.querySelector('.concept');
+            const amountInput = div.querySelector('.amount');
+
+            conceptInput.addEventListener('input', () => { saveData(); });
+            amountInput.addEventListener('input', () => { saveData(); calculate(); });
+
+            setTimeout(() => conceptInput.focus(), 100);
+            calculate();
+        }
+
+        function deleteExpense(btn) {
+            const row = btn.closest('.expense-row');
+            if (row) {
+                row.style.transition = 'all 0.3s';
+                row.style.transform = 'translateX(100px)';
+                row.style.opacity = '0';
+                setTimeout(() => {
+                    row.remove();
+                    saveData();
+                    calculate();
+                }, 300);
+            }
+        }
+
+        function clearAll() {
+            if (!confirm('¿Eliminar todos los gastos registrados?')) return;
+            document.getElementById('expenses').innerHTML = '';
+            addExpense('', '');
+            document.getElementById('income').value = '';
+            saveData();
+            calculate();
+        }
+
+        function calculate() {
+            const income = parseFloat(document.getElementById('income').value) || 0;
+            let totalExpenses = 0;
+            let count = 0;
+
+            document.querySelectorAll('.amount').forEach(input => {
+                const val = parseFloat(input.value);
+                if (!isNaN(val) && val > 0) {
+                    totalExpenses += val;
+                    count++;
+                }
+            });
+
+            const balance = income - totalExpenses;
+            
+            const totalEl = document.getElementById('total');
+            const totalWrapper = document.getElementById('totalWrapper');
+            totalEl.textContent = balance.toFixed(2);
+            
+            if (balance < 0) {
+                totalWrapper.className = 'text-4xl font-black text-rose-400';
+            } else if (balance > 0) {
+                totalWrapper.className = 'text-4xl font-black text-emerald-400';
+            } else {
+                totalWrapper.className = 'text-4xl font-black text-white';
+            }
+
+            document.getElementById('statIncome').textContent = '€' + income.toFixed(2);
+            document.getElementById('statExpenses').textContent = '€' + totalExpenses.toFixed(2);
+            document.getElementById('statCount').textContent = count;
+            
+            const balanceStatEl = document.getElementById('statBalance');
+            balanceStatEl.textContent = '€' + balance.toFixed(2);
+            balanceStatEl.className = 'text-lg font-black mt-1 ' + (balance >= 0 ? 'text-emerald-400' : 'text-rose-400');
+
+            saveData();
+        }
+
+        function exportJSON() {
+            try {
+                const data = localStorage.getItem('calcData');
+                if (!data) {
+                    alert('No hay datos para exportar');
+                    return;
+                }
+                const blob = new Blob([data], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'nómina_quantum_' + new Date().toISOString().slice(0, 10) + '.json';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                alert('Error al exportar: ' + e.message);
+            }
+        }
+
+        function importJSON(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    if (!data || typeof data !== 'object') {
+                        throw new Error('Formato inválido');
+                    }
+                    localStorage.setItem('calcData', e.target.result);
+                    document.getElementById('expenses').innerHTML = '';
+                    loadData();
+                    calculate();
+                    alert('✅ Datos importados correctamente');
+                } catch (error) {
+                    alert('❌ Error al importar: ' + error.message);
+                }
+            };
+            reader.onerror = () => { alert('❌ Error al leer el archivo'); };
+            reader.readAsText(file);
+            event.target.value = '';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function showCredit() {
+            alert('⚙️ Quantum Nómina\nArquitectura Local-First Mencey\nEstilo: Quantum Finance Premium');
+        }
+
+        if (localStorage.getItem('theme') === 'light') {
+            document.documentElement.classList.add('light-mode');
+            document.querySelector('button[onclick="toggleTheme()"] i').className = 'fa-solid fa-sun';
+        }
+
+        loadData();
+        calculate();
+
+        window.addEventListener('beforeunload', () => { saveData(); });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
+                const row = e.target.closest('.expense-row');
+                if (row) {
+                    const next = row.nextElementSibling;
+                    if (next) {
+                        const input = next.querySelector('.concept');
+                        if (input) setTimeout(() => input.focus(), 50);
+                    } else {
+                        addExpense('', '');
+                    }
+                }
+            }
+        });
+
+        // REGISTRO DEL SERVICE WORKER PARA LA PWA
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                .then(reg => console.log('✅ Quantum Nómina PWA activa'))
+                .catch(err => console.warn('❌ Service Worker no registrado', err));
+            });
+        }
+    </script>
+</body>
+</html>

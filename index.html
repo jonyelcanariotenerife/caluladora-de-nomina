@@ -425,6 +425,17 @@
                 reader.readAsText(file);
             };
 
+            const enviarAlBolsillo = () => {
+                const payload = {
+                    origen: "calculadora",
+                    ingresoNeto: data.income
+                };
+                const jsonString = JSON.stringify(payload);
+                const datosCodificados = encodeURIComponent(jsonString);
+                window.location.href = "bolsillo://sincronizar?datos=" + datosCodificados;
+                showToast('Abriendo Bolsillo...');
+            };
+
             const cajasieteItems = data.cajasiete.items;
             const ingItems = data.ing.items;
             const allItems = [...cajasieteItems, ...ingItems];
@@ -494,6 +505,10 @@
                         <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Total Nómina (este mes)</span>
                         <p className="text-3xl font-black text-indigo-400 mt-1">{data.income.toFixed(2)} €</p>
                         <p className="text-[10px] text-slate-600 mt-1"><i className="fa-solid fa-pen mr-1"></i>Toca para editar</p>
+                    </button>
+
+                    <button onClick={enviarAlBolsillo} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white rounded-[2rem] p-4 text-center active:scale-[0.99] transition-all font-black mb-6 shadow-lg">
+                        <i className="fa-solid fa-paper-plane mr-2"></i> ENVIAR AL BOLSILLO
                     </button>
 
                     <div className={`p-5 rounded-[2rem] text-center border mb-6 ${saldo >= 0 ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-rose-500/10 border-rose-500/30'}`}>

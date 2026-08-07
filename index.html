@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#020205" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Nómina" />
+    <title>Calculadora de Nómina</title>
+
+    <link rel="manifest" href="manifest.json" />
+    <link rel="apple-touch-icon" href="icons/icon-192.png" />
+    <link rel="icon" href="icons/icon-192.png" />
+
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <!-- React + ReactDOM + Babel -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800;900&display=swap" rel="stylesheet" />
+
+    <style>
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        html, body { background-color: #020205; }
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            color: #e2e8f0;
+            min-height: 100vh;
+            min-height: 100dvh;
+            padding-top: env(safe-area-inset-top);
+            padding-bottom: env(safe-area-inset-bottom);
+            overscroll-behavior-y: contain;
+        }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 10px; }
+        @keyframes fadeIn { from { opacity:0; transform:translateY(8px) scale(0.98); } to { opacity:1; transform:translateY(0) scale(1); } }
+        .animate-fade { animation: fadeIn 0.22s ease-out forwards; }
+        @keyframes sheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        .animate-sheet { animation: sheetUp 0.28s cubic-bezier(0.32, 0.72, 0, 1) forwards; }
+        @keyframes guidePulse { 0% { box-shadow: 0 0 0 0 rgba(99,102,241,0.55); } 70% { box-shadow: 0 0 0 16px rgba(99,102,241,0); } 100% { box-shadow: 0 0 0 0 rgba(99,102,241,0); } }
+        .guide-pulse { animation: guidePulse 2.2s infinite; }
+        .card-edit-hover:active .edit-icon,
+        .card-edit-hover:hover .edit-icon { opacity: 1; }
+        .edit-icon { opacity: 0.55; transition: opacity 0.2s; }
+        input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
+        input, button, select { font-family: inherit; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        /* ============================================================================
+         * SERVICIOS — Sincronización con Bolsillo (deep link nativo)
+         * ----------------------------------------------------------------------------
+         * Comunicación directa entre las dos apps nativas de Android sin pasar por
+         * archivos JSON ni por El Hilván (PC): usamos un intent-filter con esquema
+         * personalizado (bolsillo://sincronizar) para que Android despierte a
+         * Bolsillo y le pase el saldo ya calculado. Fuera de Android nativo (p. ej.
+         * probando en el navegador) estas funciones simplemente no hacen nada.
+         * ========================================================================== */
+        window.CalculadoraServices = (function () {
+            const isNative = () => !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+            const getAppPlugin = () => (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) || null;
+
+            // Guardia anti-duplicados: si Bolsillo nos despertó desde cero (app
+            // cerrada), tanto getLaunchUrl() como el listener 'appUrlOpen' en
+            // caliente pueden llegar a dispararse los dos para el mismo
+            // lanzamiento. Sin esto, responderíamos dos veces y Bolsillo
+            // acabaría con una entrada de reajuste duplicada en su auditoría.
+            let ultimaUrlProcesada = null;
+            let ultimaUrlProcesadaEn = 0;
+            const VENTANA_DEDUP_MS = 4000;
+            function yaProcesada(url) {
+                const ahora = Date.now();
+                if (url === ultimaUrlProcesada && (ahora - ultimaUrlProcesadaEn) < VENTANA_DEDUP_MS) return true;
+                ultimaUrlProcesada = url;
+                ultimaUrlProcesadaEn = ahora;
+                return false;
+            }
+
+            // Envía el saldo actual a Bolsillo vía bolsillo://sincronizar.
+            // auto=1 le dice a Bolsillo que lo aplique directamente (sin pedir
+            // confirmación) porque el usuario ya lo confirmó aquí, en la Calculadora.
+            async function enviarABolsillo(saldo, { auto = true, thenMinimize = false } = {}) {
+                if (!isNative()) {
+                    console.info('[CalculadoraServices] No estamos en Android nativo; deep link omitido.', { saldo });
+                    return false;
+                }
+                const App = getAppPlugin();
+                if (!App || !App.openUrl) return false;
+                const payload = { source: 'calculadora-nomina', saldo: Number(saldo), at: new Date().toISOString() };
+                const datos = encodeURIComponent(JSON.stringify(payload));
+                const url = `bolsillo://sincronizar?datos=${datos}&auto=${auto ? '1' : '0'}`;
+                try {
+                    await App.openUrl({ url });
+                    if (thenMinimize && App.minimizeApp) {
+                        setTimeout(() => { App.minimizeApp().catch(() => {}); }, 350);
+                    }
+                    return true;
+                } catch (e) {
+                    console.warn('[CalculadoraServices] No se pudo abrir Bolsillo (¿está instalado?)', e);
+                    return false;
+                }
+            }
+
+            // Procesa una URL entrante candidata a "calculadora://sincronizar?solicita=1",
+            // venga de donde venga (listener en caliente o getLaunchUrl en frío).
+            // Centralizado aquí para que ambas vías compartan el mismo parseo y
+            // la misma guardia anti-duplicados.
+            function procesarSolicitudEntrante(rawUrl, obtenerSaldoActual) {
+                if (!rawUrl) return;
+                try {
+                    const url = new URL(rawUrl);
+                    if (url.protocol !== 'calculadora:') return;
+                    const esRutaSincronizar = url.hostname === 'sincronizar' || url.pathname.replace(/^\/+/, '') === 'sincronizar';
+                    if (!esRutaSincronizar) return;
+                    if (url.searchParams.get('solicita') !== '1') return;
+                    if (yaProcesada(rawUrl)) {
+                        console.info('[CalculadoraServices] Solicitud repetida ignorada (arranque en frío + listener en caliente).', rawUrl);
+                        return;
+                    }
+                    const saldoActual = obtenerSaldoActual ? obtenerSaldoActual() : null;
+                    if (saldoActual != null) {
+                        enviarABolsillo(saldoActual, { auto: true, thenMinimize: true });
+                    }
+                } catch (e) { /* URL no reconocida, se ignora */ }
+            }
+
+            // Escucha cuando Bolsillo nos abre pidiendo el saldo actual
+            // (calculadora://sincronizar?solicita=1) — pasa esto cuando, en Bolsillo,
+            // el usuario pulsa "Sincronizar con la Calculadora" y no hay datos
+            // recientes en caché. Respondemos al momento y nos minimizamos para
+            // devolver el foco a Bolsillo, como si nunca hubiéramos interrumpido.
+            function escucharSolicitudDeBolsillo(obtenerSaldoActual) {
+                if (!isNative()) return;
+                const App = getAppPlugin();
+                if (!App) return;
+
+                // Caso "app ya en memoria" (segundo plano o primer plano): el
+                // runtime de Capacitor dispara esto en caliente.
+                if (App.addListener) {
+                    App.addListener('appUrlOpen', (data) => {
+                        procesarSolicitudEntrante(data && data.url, obtenerSaldoActual);
+                    });
+                }
+
+                // Caso "arranque en frío": Bolsillo lanzó la Calculadora desde
+                // cero (no estaba en memoria) y 'appUrlOpen' puede dispararse
+                // antes de que este listener llegue a registrarse, perdiendo el
+                // aviso. getLaunchUrl() nos da la URL con la que arrancó la app,
+                // así la solicitud nunca se pierde por una carrera de tiempos.
+                if (App.getLaunchUrl) {
+                    App.getLaunchUrl()
+                        .then((result) => procesarSolicitudEntrante(result && result.url, obtenerSaldoActual))
+                        .catch(() => {});
+                }
+            }
+
+            return { isNative, enviarABolsillo, escucharSolicitudDeBolsillo };
+        })();
+
+        // ---------- CONSTANTES ----------
+        const STORAGE_KEY = 'calculadora_nomina_v1';
+
+        const DEFAULT_DATA = {
+            income: 1500,
+            cajasiete: {
+                items: [
+                    { name: 'Hipoteca', amount: 500, fixed: true },
+                    { name: 'Teléfono', amount: 7.11, fixed: true },
+                    { name: 'Coche', amount: 138, fixed: true },
+                    { name: 'Amortizar', amount: 100, fixed: false },
+                    { name: 'Ahorro Caja7', amount: 50, fixed: false }
+                ]
+            },
+            ing: {
+                items: [
+                    { name: 'Plan de pensiones', amount: 30, fixed: true },
+                    { name: 'Moto', amount: 112.29, fixed: true },
+                    { name: 'Ing cuenta naranja (Ahorro)', amount: 50, fixed: false },
+                    { name: 'Saldo para gastar al mes', amount: 439.12, fixed: false }
+                ]
+            }
+        };
+
+        // ---------- PERSISTENCIA ----------
+        const loadData = () => {
+            try {
+                const saved = localStorage.getItem(STORAGE_KEY);
+                if (!saved) return { ...DEFAULT_DATA };
+                const parsed = JSON.parse(saved);
+                return {
+                    income: typeof parsed.income === 'number' ? parsed.income : DEFAULT_DATA.income,
+                    cajasiete: { items: Array.isArray(parsed.cajasiete?.items) ? parsed.cajasiete.items : [] },
+                    ing: { items: Array.isArray(parsed.ing?.items) ? parsed.ing.items : [] }
+                };
+            } catch (e) {
+                return { ...DEFAULT_DATA };
+            }
+        };
+        const saveData = (d) => {
+            try { localStorage.setItem(STORAGE_KEY, JSON.stringify(d)); } catch (e) {}
+        };
+
+        // ---------- TOAST ----------
+        const useToast = () => {
+            const [toast, setToast] = useState(null);
+            const show = (msg, icon = 'fa-circle-check') => {
+                setToast({ msg, icon });
+                clearTimeout(show._t);
+                show._t = setTimeout(() => setToast(null), 2200);
+            };
+            const Toast = () => !toast ? null : (
+                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] bg-[#14161f] border border-white/10 text-white text-sm font-bold px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-2 animate-fade">
+                    <i className={`fa-solid ${toast.icon} text-emerald-400`}></i> {toast.msg}
+                </div>
+            );
+            return [Toast, show];
+        };
+
+        // ---------- BOTTOM SHEET MODAL: EDITAR ITEM ----------
+        const ItemSheet = ({ mode, group, groupLabel, groupColor, initial, onClose, onSave, onDelete }) => {
+            const [name, setName] = useState(initial?.name || '');
+            const [amount, setAmount] = useState(initial?.amount ?? '');
+            const [fixed, setFixed] = useState(initial?.fixed !== false);
+            const inputRef = useRef(null);
+
+            useEffect(() => { inputRef.current && inputRef.current.focus(); }, []);
+
+            const handleSave = () => {
+                if (!name.trim()) { alert('Ponle un nombre al concepto.'); return; }
+                const num = parseFloat(amount);
+                if (isNaN(num) || num < 0) { alert('El importe debe ser un número positivo.'); return; }
+                onSave({ name: name.trim(), amount: num, fixed });
+            };
+
+            return (
+                <div className="fixed inset-0 z-[60] flex items-end justify-center">
+                    <div className="absolute inset-0 bg-black/70 backdrop-blur-sm animate-fade" onClick={onClose}></div>
+                    <div className="relative w-full max-w-md bg-[#0f111a] border-t border-white/10 rounded-t-[2.5rem] p-6 pb-8 animate-sheet"
+                         style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 1.5rem)' }}>
+                        <div className="w-10 h-1.5 bg-white/15 rounded-full mx-auto mb-5"></div>
+                        <div className="flex items-center justify-between mb-5">
+                            <h3 className="text-lg font-black text-white">
+                                {mode === 'add' ? 'Nuevo concepto' : 'Editar concepto'}
+                            </h3>
+                            <span className="text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full" style={{ color: groupColor, backgroundColor: groupColor + '22' }}>
+                                {groupLabel}
+                            </span>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1 block">Nombre</label>
+                                <input ref={inputRef} type="text" value={name} onChange={e => setName(e.target.value)}
+                                    placeholder="Ej: Hipoteca, Ahorro, Moto..."
+                                    className="w-full bg-white/5 border border-white/10 rounded-xl p-3.5 text-white text-base focus:outline-none focus:border-indigo-500" />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1 block">Importe (€)</label>
+                                <input type="number" inputMode="decimal" step="0.01" value={amount} onChange={e => setAmount(e.target.value)}
+                                    placeholder="0.00"
+                                    className="w-full bg-white/5 border border-white/10 rounded-xl p-3.5 text-white text-base focus:outline-none focus:border-indigo-500" />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2 block">Tipo</label>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <button type="button" onClick={() => setFixed(true)}
+                                        className={`py-3 rounded-xl font-bold text-sm border transition-all ${fixed ? 'bg-white/10 border-white/20 text-white' : 'bg-white/5 border-white/5 text-slate-500'}`}>
+                                        Fijo
+                                    </button>
+                                    <button type="button" onClick={() => setFixed(false)}
+                                        className={`py-3 rounded-xl font-bold text-sm border transition-all ${!fixed ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300' : 'bg-white/5 border-white/5 text-slate-500'}`}>
+                                        Variable
+                                    </button>
+                                </div>
+                                <p className="text-[11px] text-slate-500 mt-2">Los fijos se descuentan siempre. Los variables se comparan contra lo que sobra ese mes.</p>
+                            </div>
+                        </div>
+
+                        <div className="flex gap-3 mt-6">
+                            {mode === 'edit' && (
+                                <button onClick={onDelete} className="w-14 shrink-0 flex items-center justify-center bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-xl border border-rose-500/20 transition-colors">
+                                    <i className="fa-solid fa-trash"></i>
+                                </button>
+                            )}
+                            <button onClick={handleSave} className="flex-1 bg-white text-black py-3.5 rounded-xl font-black text-sm hover:bg-indigo-500 hover:text-white transition-all">
+                                GUARDAR
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // ---------- BOTTOM SHEET: EDITAR TOTAL NÓMINA ----------
+        const IncomeSheet = ({ initial, onClose, onSave }) => {
+            const [value, setValue] = useState(initial);
+            const inputRef = useRef(null);
+            useEffect(() => { inputRef.current && inputRef.current.focus(); inputRef.current && inputRef.current.select(); }, []);
+            const handleSave = () => {
+                const num = parseFloat(value);
+                if (isNaN(num) || num < 0) { alert('Introduce un importe válido.'); return; }
+                onSave(num);
+            };
+            return (
+                <div className="fixed inset-0 z-[60] flex items-end justify-center">
+                    <div className="absolute inset-0 bg-black/70 backdrop-blur-sm animate-fade" onClick={onClose}></div>
+                    <div className="relative w-full max-w-md bg-[#0f111a] border-t border-white/10 rounded-t-[2.5rem] p-6 pb-8 animate-sheet"
+                         style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 1.5rem)' }}>
+                        <div className="w-10 h-1.5 bg-white/15 rounded-full mx-auto mb-5"></div>
+                        <h3 className="text-lg font-black text-white mb-5">Total de nómina este mes</h3>
+                        <input ref={inputRef} type="number" inputMode="decimal" step="0.01" value={value} onChange={e => setValue(e.target.value)}
+                            className="w-full bg-white/5 border border-white/10 rounded-xl p-4 text-white text-2xl font-black text-center focus:outline-none focus:border-indigo-500" />
+                        <button onClick={handleSave} className="w-full mt-6 bg-white text-black py-3.5 rounded-xl font-black text-sm hover:bg-indigo-500 hover:text-white transition-all">
+                            GUARDAR
+                        </button>
+                    </div>
+                </div>
+            );
+        };
+
+        // ---------- FILA DE ITEM ----------
+        const ItemRow = ({ item, onEdit }) => (
+            <li onClick={onEdit} className="flex items-center gap-3 py-2.5 px-1 active:bg-white/5 rounded-xl transition-colors group card-edit-hover cursor-pointer">
+                <span className={`shrink-0 w-12 text-center text-[9px] font-black px-1 py-1 rounded-md uppercase tracking-wide ${item.fixed === false ? 'bg-indigo-500/20 text-indigo-300' : 'bg-white/5 text-slate-500'}`}>
+                    {item.fixed === false ? 'Var' : 'Fijo'}
+                </span>
+                <span className="text-slate-300 flex-1 truncate text-sm">{item.name}</span>
+                <span className="font-bold text-white text-sm tabular-nums shrink-0">{item.amount.toFixed(2)} €</span>
+                <i className="edit-icon fa-solid fa-chevron-right w-3 shrink-0 text-center text-[10px] text-slate-600"></i>
+            </li>
+        );
+
+        // ---------- GRUPO (CAJASIETE / ING) ----------
+        const GroupCard = ({ title, subtitle, items, total, color, accentClass, onAddItem, onEditItem }) => (
+            <div className="bg-white/5 border border-white/5 rounded-[2rem] p-5" style={{ borderTop: `4px solid ${color}` }}>
+                <div className="flex justify-between items-start mb-1">
+                    <div>
+                        <h4 className="text-lg font-black text-white leading-tight">{title}</h4>
+                        <p className="text-[11px] text-slate-500">{subtitle}</p>
+                    </div>
+                    <span className="text-xl font-black" style={{ color }}>{total.toFixed(2)} €</span>
+                </div>
+                <ul className="mt-3 divide-y divide-white/5">
+                    {items.length === 0 && <p className="text-slate-500 text-xs py-4 text-center">Sin conceptos todavía.</p>}
+                    {items.map((item, idx) => <ItemRow key={idx} item={item} onEdit={() => onEditItem(idx)} />)}
+                </ul>
+                <button onClick={onAddItem} className={`w-full mt-4 py-3 bg-white/5 active:scale-[0.98] text-slate-300 rounded-xl font-bold text-xs transition-all border border-white/10 flex justify-center items-center gap-2 ${accentClass}`}>
+                    <i className="fa-solid fa-plus"></i> AÑADIR CONCEPTO
+                </button>
+            </div>
+        );
+
+        // ---------- MODAL: CREADOR ----------
+        const CreatorModal = ({ onClose }) => (
+            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[80] p-4">
+                <div className="bg-[#0f111a] border border-white/10 p-8 rounded-[2rem] w-full max-w-sm shadow-2xl animate-fade text-center relative overflow-hidden">
+                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-emerald-500"></div>
+                    <div className="w-20 h-20 mx-auto bg-white/5 rounded-full flex items-center justify-center mb-6 border border-white/10 shadow-[0_0_30px_rgba(79,70,229,0.2)]">
+                        <i className="fa-solid fa-code text-3xl text-indigo-400"></i>
+                    </div>
+                    <h3 className="text-xl font-black text-white mb-2">Calculadora de Nómina</h3>
+                    <p className="text-sm text-slate-400 mb-6 leading-relaxed">
+                        Software desarrollado y diseñado exclusivamente por <br/>
+                        <strong className="text-white">Jonathan Pérez Galán</strong>.<br/><br/>
+                        Todos los derechos reservados.
+                    </p>
+                    <button onClick={onClose} className="w-full py-3 bg-white/10 hover:bg-white/20 text-white rounded-xl font-bold text-xs transition-all">
+                        CERRAR
+                    </button>
+                </div>
+            </div>
+        );
+
+        // ---------- MODAL: GUÍA DE USUARIO ----------
+        const GuideModal = ({ guideTab, setGuideTab, onClose }) => {
+            const tabs = [
+                { id: 'conceptos', label: 'Conceptos', icon: 'fa-list-check' },
+                { id: 'saldo', label: 'Saldo', icon: 'fa-scale-balanced' },
+                { id: 'sincronizar', label: 'Sincronizar', icon: 'fa-mobile-screen-button' }
+            ];
+            return (
+                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[80] p-4">
+                    <div className="bg-[#0f111a] border border-white/10 rounded-[2rem] w-full max-w-md shadow-2xl animate-fade max-h-[85vh] flex flex-col overflow-hidden">
+                        <div className="flex justify-between items-center px-6 pt-6 pb-4 border-b border-white/10 shrink-0">
+                            <h3 className="text-lg font-black text-white flex items-center gap-2">
+                                <i className="fa-solid fa-circle-question text-indigo-400"></i> Guía de Usuario
+                            </h3>
+                            <button onClick={onClose} className="text-slate-400 p-1"><i className="fa-solid fa-xmark text-lg"></i></button>
+                        </div>
+
+                        <div className="flex gap-2 px-6 pt-4 flex-wrap shrink-0">
+                            {tabs.map(t => (
+                                <button key={t.id} onClick={() => setGuideTab(t.id)}
+                                    className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 ${guideTab === t.id ? 'bg-indigo-600 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}>
+                                    <i className={`fa-solid ${t.icon}`}></i> {t.label}
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="px-6 py-5 overflow-y-auto custom-scrollbar text-sm text-slate-300 leading-relaxed space-y-3">
+                            {guideTab === 'conceptos' && (
+                                <>
+                                    <h4 className="text-white font-black text-base">Fijo vs. Variable</h4>
+                                    <p>Cada concepto de Cajasiete o ING se marca como <span className="text-white font-bold">Fijo</span> o <span className="text-white font-bold">Variable</span>. Los fijos son gastos que se descuentan siempre (hipoteca, suscripciones...). Los variables son lo que planeas hacer con lo que sobra ese mes (amortizar, ahorro extra...).</p>
+                                    <p>Toca cualquier concepto de la lista para editarlo o borrarlo. Toca "AÑADIR CONCEPTO" para crear uno nuevo en ese grupo.</p>
+                                    <p>El Total de Nómina de arriba se edita tocando directamente la tarjeta.</p>
+                                </>
+                            )}
+                            {guideTab === 'saldo' && (
+                                <>
+                                    <h4 className="text-white font-black text-base">Cómo se calcula el saldo</h4>
+                                    <p><span className="text-white font-bold">Fijos:</span> suma de todos los conceptos marcados como Fijo, en Cajasiete e ING.</p>
+                                    <p><span className="text-white font-bold">Disponible real:</span> Total Nómina menos Fijos. Es lo que realmente te queda para repartir en variables.</p>
+                                    <p><span className="text-white font-bold">Saldo del mes:</span> Disponible real menos lo que tienes planificado en Variables. Si es positivo, te sobra dinero por repartir; si es negativo, tienes que recortar en algún variable.</p>
+                                </>
+                            )}
+                            {guideTab === 'sincronizar' && (
+                                <>
+                                    <h4 className="text-white font-black text-base">Con Bolsillo (automático)</h4>
+                                    <p>Cada vez que guardas el concepto <span className="text-white font-bold">"Saldo para gastar al mes"</span> (dentro de ING), este número se manda solo a la app Bolsillo y queda puesto como su presupuesto del mes. No hace falta hacer nada más: guardas aquí y ya está allí.</p>
+                                    <p><span className="text-white font-bold">ENVIAR A BOLSILLO AHORA:</span> hace lo mismo a mano, en cualquier momento, sin necesidad de tocar ese concepto.</p>
+                                    <p>Si desde Bolsillo pulsas su botón "Sincronizar con la Calculadora" y no tiene un dato reciente, esta app se abrirá un instante sola, le responderá con el saldo actual y volverá a Bolsillo automáticamente.</p>
+                                    <h4 className="text-white font-black text-base pt-2">Con El Hilván (PC)</h4>
+                                    <p><span className="text-white font-bold">COMPARTIR:</span> genera un JSON con tu nómina actual y abre el panel de compartir de tu móvil (Syncthing, Archivos...). Si tu navegador no lo soporta, lo descarga directamente.</p>
+                                    <p><span className="text-white font-bold">IMPORTAR:</span> carga un JSON, ya sea uno exportado desde aquí o un backup completo de El Hilván, y sustituye tus datos actuales tras pedirte confirmación.</p>
+                                    <p>En El Hilván (PC), la pestaña "Distribución Nómina" tiene su propio botón "Sincronizar Nómina (móvil)" para leer el archivo que generes aquí.</p>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+
+        // Normaliza tanto el JSON propio de esta app como el backup completo
+        // que exporta "El Hilván" ({income, payroll:{cajasiete, ing}}).
+        const normalizeImported = (obj) => {
+            if (!obj || typeof obj !== 'object') return null;
+            const caja = obj.cajasiete?.items || obj.payroll?.cajasiete?.items;
+            const ing = obj.ing?.items || obj.payroll?.ing?.items;
+            if (!Array.isArray(caja) || !Array.isArray(ing)) return null;
+            const clean = (items) => items.map(i => ({
+                name: String(i.name || '').trim(),
+                amount: parseFloat(i.amount) || 0,
+                fixed: i.fixed !== false
+            })).filter(i => i.name);
+            return {
+                income: typeof obj.income === 'number' ? obj.income : DEFAULT_DATA.income,
+                cajasiete: { items: clean(caja) },
+                ing: { items: clean(ing) },
+                exportedAt: obj.exportedAt || null
+            };
+        };
+
+        const buildExportPayload = (data) => ({
+            source: 'calculadora-nomina',
+            exportedAt: new Date().toISOString(),
+            income: data.income,
+            cajasiete: { items: data.cajasiete.items },
+            ing: { items: data.ing.items }
+        });
+
+        // ---------- APP ----------
+        const App = () => {
+            const [data, setData] = useState(loadData);
+            const [sheet, setSheet] = useState(null); // { mode, group, index }
+            const [incomeSheetOpen, setIncomeSheetOpen] = useState(false);
+            const [showCreator, setShowCreator] = useState(false);
+            const [showGuide, setShowGuide] = useState(false);
+            const [guideTab, setGuideTab] = useState('conceptos');
+            const [Toast, showToast] = useToast();
+            const importInputRef = useRef(null);
+
+            useEffect(() => { saveData(data); }, [data]);
+
+            // Identifica el concepto "Saldo para gastar al mes" dentro de ING: es la
+            // base de cálculo que Bolsillo usa como presupuesto mensual (Base).
+            const esConceptoSaldoGastarMes = (item) =>
+                !!item && typeof item.name === 'string' && item.name.trim().toLowerCase() === 'saldo para gastar al mes';
+
+            const dataRef = useRef(data);
+            useEffect(() => { dataRef.current = data; }, [data]);
+
+            // Si Bolsillo nos abre pidiendo el saldo (porque el usuario pulsó
+            // "Sincronizar con la Calculadora" y no tenía datos recientes),
+            // respondemos con el valor actual y volvemos a Bolsillo solos.
+            useEffect(() => {
+                window.CalculadoraServices.escucharSolicitudDeBolsillo(() => {
+                    const item = (dataRef.current.ing.items || []).find(esConceptoSaldoGastarMes);
+                    return item ? item.amount : null;
+                });
+            }, []);
+
+            const handleExport = async () => {
+                const payload = buildExportPayload(data);
+                const json = JSON.stringify(payload, null, 2);
+                const filename = `nomina_${new Date().toISOString().slice(0, 10)}.json`;
+
+                const file = new File([json], filename, { type: 'application/json' });
+                if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                    try {
+                        await navigator.share({ files: [file], title: 'Nómina', text: 'Datos de nómina' });
+                        showToast('Compartido');
+                        return;
+                    } catch (err) {
+                        if (err && err.name === 'AbortError') return; // el usuario canceló
+                        // si falla el share, seguimos con la descarga como respaldo
+                    }
+                }
+                const blob = new Blob([json], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                a.click();
+                URL.revokeObjectURL(url);
+                showToast('Descargado', 'fa-download');
+            };
+
+            const handleImportFile = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    try {
+                        const parsed = JSON.parse(ev.target.result);
+                        const normalized = normalizeImported(parsed);
+                        if (!normalized) throw new Error('estructura inválida');
+                        const fecha = normalized.exportedAt ? new Date(normalized.exportedAt).toLocaleString('es-ES') : 'desconocida';
+                        const ok = confirm(
+                            `Vas a reemplazar tus datos actuales con este archivo (exportado: ${fecha}):\n\n` +
+                            `Total Nómina: ${normalized.income.toFixed(2)}€\n` +
+                            `Cajasiete: ${normalized.cajasiete.items.length} concepto(s)\n` +
+                            `ING: ${normalized.ing.items.length} concepto(s)\n\n¿Continuar?`
+                        );
+                        if (ok) {
+                            setData({ income: normalized.income, cajasiete: normalized.cajasiete, ing: normalized.ing });
+                            showToast('Datos importados');
+                        }
+                    } catch (err) {
+                        alert('El archivo JSON no tiene la estructura de nómina esperada.');
+                    }
+                    if (importInputRef.current) importInputRef.current.value = '';
+                };
+                reader.readAsText(file);
+            };
+
+            const cajasieteItems = data.cajasiete.items;
+            const ingItems = data.ing.items;
+            const allItems = [...cajasieteItems, ...ingItems];
+
+            const totalCaja = cajasieteItems.reduce((a, i) => a + i.amount, 0);
+            const totalIng = ingItems.reduce((a, i) => a + i.amount, 0);
+            const sumaFija = allItems.filter(i => i.fixed !== false).reduce((a, i) => a + i.amount, 0);
+            const sumaVariablePlan = allItems.filter(i => i.fixed === false).reduce((a, i) => a + i.amount, 0);
+            const disponibleVariable = data.income - sumaFija;
+            const saldo = disponibleVariable - sumaVariablePlan;
+
+            const openAdd = (group) => setSheet({ mode: 'add', group });
+            const openEdit = (group, index) => setSheet({ mode: 'edit', group, index, item: data[group].items[index] });
+            const closeSheet = () => setSheet(null);
+
+            const handleSaveItem = (values) => {
+                const { mode, group, index } = sheet;
+                const newItems = [...data[group].items];
+                if (mode === 'add') {
+                    newItems.push(values);
+                } else {
+                    newItems[index] = values;
+                }
+                setData({ ...data, [group]: { items: newItems } });
+                closeSheet();
+                showToast(mode === 'add' ? 'Concepto añadido' : 'Concepto actualizado');
+
+                // Sincronización automática: si lo que se acaba de guardar es el
+                // "Saldo para gastar al mes", se lo mandamos a Bolsillo sin que
+                // haga falta exportar/importar nada a mano.
+                if (group === 'ing' && esConceptoSaldoGastarMes(values)) {
+                    window.CalculadoraServices.enviarABolsillo(values.amount, { auto: true });
+                }
+            };
+
+            const handleDeleteItem = () => {
+                const { group, index } = sheet;
+                if (!confirm('¿Eliminar este concepto?')) return;
+                const newItems = data[group].items.filter((_, i) => i !== index);
+                setData({ ...data, [group]: { items: newItems } });
+                closeSheet();
+                showToast('Concepto eliminado', 'fa-trash');
+            };
+
+            const handleSaveIncome = (num) => {
+                setData({ ...data, income: num });
+                setIncomeSheetOpen(false);
+                showToast('Nómina actualizada');
+            };
+
+            const saldoGastarMesActual = (data.ing.items || []).find(esConceptoSaldoGastarMes)?.amount ?? null;
+
+            const handleEnviarABolsillo = async () => {
+                if (saldoGastarMesActual == null) {
+                    alert('No encuentro el concepto "Saldo para gastar al mes" en ING para poder enviarlo.');
+                    return;
+                }
+                if (!window.CalculadoraServices.isNative()) {
+                    showToast('Solo disponible en la app Android instalada', 'fa-triangle-exclamation');
+                    return;
+                }
+                const ok = await window.CalculadoraServices.enviarABolsillo(saldoGastarMesActual, { auto: true });
+                if (ok) showToast('Enviado a Bolsillo', 'fa-mobile-screen-button');
+                else showToast('No se pudo abrir Bolsillo (¿está instalado?)', 'fa-triangle-exclamation');
+            };
+
+            return (
+                <div className="max-w-md mx-auto px-4 py-6 pb-16">
+                    <header className="flex items-center gap-3 mb-6">
+                        <div className="w-11 h-11 rounded-2xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center shrink-0">
+                            <i className="fa-solid fa-file-invoice text-indigo-400"></i>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <h1 className="text-xl font-black text-white tracking-tight truncate">Calculadora de Nómina</h1>
+                            <p className="text-[11px] text-slate-500">Cero Absoluto</p>
+                        </div>
+                    </header>
+
+                    <div className="flex gap-3 mb-3">
+                        <button onClick={handleExport} className="flex-1 flex items-center justify-center gap-2 bg-white/5 border border-white/10 text-slate-200 py-3 rounded-xl font-bold text-xs active:scale-[0.98] transition-all">
+                            <i className="fa-solid fa-share-nodes"></i> COMPARTIR
+                        </button>
+                        <button onClick={() => importInputRef.current && importInputRef.current.click()} className="flex-1 flex items-center justify-center gap-2 bg-white/5 border border-white/10 text-slate-200 py-3 rounded-xl font-bold text-xs active:scale-[0.98] transition-all">
+                            <i className="fa-solid fa-file-import"></i> IMPORTAR
+                            <input type="file" accept=".json" ref={importInputRef} onChange={handleImportFile} className="hidden" />
+                        </button>
+                    </div>
+
+                    <button onClick={handleEnviarABolsillo} className="w-full flex items-center justify-center gap-2 bg-indigo-600/20 border border-indigo-500/40 text-indigo-300 py-3 rounded-xl font-bold text-xs active:scale-[0.98] transition-all mb-6">
+                        <i className="fa-solid fa-mobile-screen-button"></i> ENVIAR A BOLSILLO AHORA
+                    </button>
+
+                    <button onClick={() => setIncomeSheetOpen(true)} className="w-full bg-white/5 border border-white/5 rounded-[2rem] p-5 text-center active:scale-[0.99] transition-transform mb-4">
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Total Nómina (este mes)</span>
+                        <p className="text-3xl font-black text-indigo-400 mt-1">{data.income.toFixed(2)} €</p>
+                        <p className="text-[10px] text-slate-600 mt-1"><i className="fa-solid fa-pen mr-1"></i>Toca para editar</p>
+                    </button>
+
+                    <div className={`p-5 rounded-[2rem] text-center border mb-6 ${saldo >= 0 ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-rose-500/10 border-rose-500/30'}`}>
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Saldo del mes (vs. plan variable)</p>
+                        <p className={`text-3xl font-black mt-1 ${saldo >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{saldo >= 0 ? '+' : ''}{saldo.toFixed(2)} €</p>
+                        <p className="text-xs text-slate-400 mt-1.5 px-2">
+                            {saldo >= 0
+                                ? `Te sobran ${saldo.toFixed(2)}€ para repartir entre tus conceptos variables.`
+                                : `Te faltan ${Math.abs(saldo).toFixed(2)}€: tendrás que recortar en variables.`}
+                        </p>
+                        <p className="text-[10px] text-slate-500 mt-3">Fijos: {sumaFija.toFixed(2)}€ · Variable planificado: {sumaVariablePlan.toFixed(2)}€ · Disponible real: {disponibleVariable.toFixed(2)}€</p>
+                    </div>
+
+                    <div className="space-y-5">
+                        <GroupCard
+                            title="Cajasiete"
+                            subtitle="Se queda aquí"
+                            items={cajasieteItems}
+                            total={totalCaja}
+                            color="#38bdf8"
+                            accentClass="active:bg-sky-500/20"
+                            onAddItem={() => openAdd('cajasiete')}
+                            onEditItem={(idx) => openEdit('cajasiete', idx)}
+                        />
+                        <GroupCard
+                            title="Traspasar a ING"
+                            subtitle="Se mueve al otro banco"
+                            items={ingItems}
+                            total={totalIng}
+                            color="#fb923c"
+                            accentClass="active:bg-orange-500/20"
+                            onAddItem={() => openAdd('ing')}
+                            onEditItem={(idx) => openEdit('ing', idx)}
+                        />
+                    </div>
+
+                    <p className="text-center text-[10px] text-slate-600 mt-8">Los datos se guardan solo en este dispositivo.</p>
+
+                    <div className="mt-6 flex justify-center pb-2">
+                        <button onClick={() => setShowCreator(true)} className="flex flex-col items-center gap-2 text-slate-600 hover:text-indigo-400 transition-colors group">
+                            <i className="fa-solid fa-fingerprint text-xl group-hover:scale-110 transition-transform"></i>
+                            <span className="text-[9px] font-black uppercase tracking-widest">Creador</span>
+                        </button>
+                    </div>
+
+                    {sheet && (
+                        <ItemSheet
+                            mode={sheet.mode}
+                            group={sheet.group}
+                            groupLabel={sheet.group === 'cajasiete' ? 'Cajasiete' : 'ING'}
+                            groupColor={sheet.group === 'cajasiete' ? '#38bdf8' : '#fb923c'}
+                            initial={sheet.item}
+                            onClose={closeSheet}
+                            onSave={handleSaveItem}
+                            onDelete={handleDeleteItem}
+                        />
+                    )}
+                    {incomeSheetOpen && (
+                        <IncomeSheet initial={data.income} onClose={() => setIncomeSheetOpen(false)} onSave={handleSaveIncome} />
+                    )}
+                    {showCreator && <CreatorModal onClose={() => setShowCreator(false)} />}
+                    {showGuide && <GuideModal guideTab={guideTab} setGuideTab={setGuideTab} onClose={() => setShowGuide(false)} />}
+
+                    <button
+                        onClick={() => setShowGuide(true)}
+                        className="guide-pulse fixed bottom-6 right-6 z-40 w-14 h-14 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-2xl flex items-center justify-center transition-colors"
+                        style={{ bottom: 'calc(env(safe-area-inset-bottom) + 1.5rem)' }}
+                        title="Guía de usuario"
+                    >
+                        <i className="fa-solid fa-circle-question text-xl"></i>
+                    </button>
+
+                    <Toast />
+                </div>
+            );
+        };
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+
+    <script>
+        // El SW solo se registra fuera del WebView nativo de Capacitor: dentro de
+        // la app empaquetada los assets ya van embebidos y cachear con un SW solo
+        // arriesga a servir una versión vieja tras actualizar el APK.
+        if ('serviceWorker' in navigator && !window.Capacitor) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js').catch(() => {});
+            });
+        }
+
+        // Ajustes específicos cuando la app corre empaquetada con Capacitor.
+        document.addEventListener('DOMContentLoaded', () => {
+            if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+                try {
+                    const { StatusBar } = window.Capacitor.Plugins;
+                    StatusBar && StatusBar.setBackgroundColor({ color: '#020205' });
+                    StatusBar && StatusBar.setStyle({ style: 'DARK' });
+                } catch (e) { /* plugin no disponible, se ignora */ }
+                try {
+                    const { SplashScreen } = window.Capacitor.Plugins;
+                    SplashScreen && SplashScreen.hide();
+                } catch (e) { /* plugin no disponible, se ignora */ }
+            }
+        });
+    </script>
+</body>
+</html>
